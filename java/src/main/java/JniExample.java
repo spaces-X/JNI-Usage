@@ -1,13 +1,21 @@
 public class JniExample {
 
     static {
-        System.loadLibrary("hello");
+        String libraryPath = System.getProperty("java.library.path");
+        System.out.println(libraryPath);
+        System.loadLibrary("segment_builder_tool");
     }
-    public native long helloworld();
 
-    public static void main(String[] args) {
-       JniExample example = new JniExample();
-       long c = example.helloworld();
-        System.out.println(Long.toHexString(c));
-    }
+    public native void segmentBuild(String metaFilePath, String dataDirPath);
+
+//    public static void main(String[] args) {
+//
+//        if (args.length != 2) {
+//            System.out.println("please input the metaFilePath and dataDirPath");
+//        }
+//        String metaFilePath = args[0];
+//        String dataDirPath = args[1];
+//       org.apache.doris.JniExample example = new org.apache.doris.JniExample();
+//       example.segmentBuild(metaFilePath, dataDirPath);
+//    }
 }
