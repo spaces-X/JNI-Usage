@@ -1,3 +1,5 @@
+package mt.doris.segmentload.etl;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -8,6 +10,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
+
+import mt.doris.segmentload.common.FileIOUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -78,31 +82,25 @@ public class Main {
 
     }
 
-
-
-    public static void main(String[] args) throws InterruptedException, IOException {
-        SparkSession sparkSession = SparkSession.builder().appName("nativeBulkLoad").enableHiveSupport().getOrCreate();
-        SparkContext sparkContext = sparkSession.sparkContext();
-        String parquetDstPath = "/ghnn01/kylin/sparkload/parquet_test/";
-        int TARGET_FILE_SIZE = 524288000;
-        Dataset<Row> dataset = sparkSession.sql(getHiveDataSQL());
-        dataset = dataset.cache();
-        Path path = new Path(parquetDstPath);
-        Configuration conf = sparkContext.hadoopConfiguration();
+    private void buildSegments(SparkSession sparkSession, String parquetBaseDstPath) throws IOException {
+        Path path = new Path(parquetBaseDstPath);
+        Configuration conf = sparkSession.sparkContext().hadoopConfiguration();
         FileSystem fs = path.getFileSystem(conf);
-        FileStatus[] files = fs.listStatus(path, new PathFilter() {
+        FileStatus[] tabletFiles = fs.listStatus(path, new PathFilter() {
             public boolean accept(Path path) {
                 return !path.getName().startsWith("_") && !path.getName().startsWith(".");
             }
         });
-        List<String> paths = (List) Arrays.stream(files).filter((f) -> {
+
+
+        List<String> tabletPaths = (List) Arrays.stream(tabletFiles).filter((f) -> {
             return f.getLen() != 0L;
         }).map((f) -> {
             return f.getPath().toString();
         }).collect(Collectors.toList());
-        int parallel = paths.size();
+        int parallel = tabletPaths.size();
         JavaSparkContext jsc = new JavaSparkContext(sparkSession.sparkContext());
-        JavaRDD<String> rdd = jsc.parallelize(paths, parallel);
+        JavaRDD<String> rdd = jsc.parallelize(tabletPaths, parallel);
         Configuration hadoopConfiguration = jsc.hadoopConfiguration();
         Broadcast<SerializableWritable<Configuration>> broadcastedHadoopConfig = jsc.broadcast(new SerializableWritable(hadoopConfiguration));
         rdd.foreachPartition((partition) -> {
@@ -112,7 +110,7 @@ public class Main {
                 fileList.add(partition.next());
             }
 
-            FileSystem hadoopFS = (new Path(parquetDstPath)).getFileSystem((Configuration)((SerializableWritable)broadcastedHadoopConfig.value()).value());
+            FileSystem hadoopFS = (new Path(parquetBaseDstPath)).getFileSystem((Configuration)((SerializableWritable)broadcastedHadoopConfig.value()).value());
             int stageId = TaskContext.get().stageId();
             long taskId = TaskContext.get().taskAttemptId();
             int attemptId = TaskContext.get().attemptNumber();
@@ -147,6 +145,18 @@ public class Main {
                 System.out.println(targetFilePath);
             }
         });
+    }
+
+
+
+    public static void main(String[] args) throws InterruptedException, IOException {
+        SparkSession sparkSession = SparkSession.builder().appName("nativeBulkLoad").enableHiveSupport().getOrCreate();
+        SparkContext sparkContext = sparkSession.sparkContext();
+        String parquetDstPath = "/ghnn01/kylin/sparkload/parquet_test/";
+        int TARGET_FILE_SIZE = 524288000;
+        Dataset<Row> dataset = sparkSession.sql(getHiveDataSQL());
+        dataset = dataset.cache();
+
         Thread.sleep(1800000L);
         sparkContext.stop();
     }

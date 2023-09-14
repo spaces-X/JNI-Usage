@@ -1,3 +1,5 @@
+package mt.doris.segmentload.jni;
+
 public class JniExample {
 
     static {
@@ -15,7 +17,7 @@ public class JniExample {
 //        }
 //        String metaFilePath = args[0];
 //        String dataDirPath = args[1];
-//       org.apache.doris.JniExample example = new org.apache.doris.JniExample();
+//       org.apache.doris.mt.doris.segmentload.jni.JniExample example = new org.apache.doris.mt.doris.segmentload.jni.JniExample();
 //       example.segmentBuild(metaFilePath, dataDirPath);
 //    }
 }

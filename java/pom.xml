@@ -31,7 +31,7 @@
 <!--                        </manifestEntries>-->
                         <manifest>
                             <addClasspath>true</addClasspath>
-                            <mainClass>Main</mainClass> <!-- 替换为你的Main类的完整路径 -->
+                            <mainClass>mt.doris.segmentload.etl.Main</mainClass> <!-- 替换为你的Main类的完整路径 -->
                         </manifest>
                     </archive>
                 </configuration>
