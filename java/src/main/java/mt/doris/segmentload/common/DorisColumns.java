@@ -10,7 +10,7 @@ import java.util.Objects;
 import java.util.Comparator;
 
 // DppColumns is used to store the
-class DorisColumns implements Comparable<DorisColumns>, Serializable {
+public class DorisColumns implements Comparable<DorisColumns>, Serializable {
     public List<Object> columns = new ArrayList<Object>();;
 
     public DorisColumns(List<Object> keys){
@@ -41,7 +41,11 @@ class DorisColumns implements Comparable<DorisColumns>, Serializable {
                 }
             }
             if (columns.get(i) instanceof Integer) {
-                cmp = ((Integer)(columns.get(i))).compareTo((Integer)(other.columns.get(i)));
+                if (other.columns.get(i) instanceof String){
+                    cmp = ((Integer)(columns.get(i))).compareTo(Integer.parseInt(other.columns.get(i).toString()));
+                } else {
+                    cmp = ((Integer)(columns.get(i))).compareTo((Integer)(other.columns.get(i)));
+                }
             } else if (columns.get(i) instanceof Long) {
                 cmp = ((Long)(columns.get(i))).compareTo((Long)(other.columns.get(i)));
             }  else if (columns.get(i) instanceof  Boolean) {

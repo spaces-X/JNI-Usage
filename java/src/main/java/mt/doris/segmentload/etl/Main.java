@@ -1,28 +1,14 @@
 package mt.doris.segmentload.etl;
 
 import java.io.BufferedReader;
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
-import java.util.stream.Collectors;
 
-import mt.doris.segmentload.common.FileIOUtils;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.PathFilter;
-import org.apache.spark.SerializableWritable;
+import mt.doris.segmentload.common.SegmentLoadException;
 import org.apache.spark.SparkContext;
-import org.apache.spark.TaskContext;
-import org.apache.spark.api.java.JavaRDD;
-import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
@@ -34,12 +20,12 @@ public class Main {
 
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
     public static String getHiveDataSQL() {
-        String sql = "SELECT `aor_id`, `location_id`, `union_id`, `dt`, `log_type`\n" +
+        String sql = "SELECT `aor_id`, `location_id`, `union_id`, cast(`dt` as int) as `dt`, `log_type`\n" +
                 "\t, `partition_view`, `first_city_id`, `second_city_id`, `pinhf_batch_id`, `pinhf_biz_type_id`\n" +
-                "\t, `abtest`, `aor_type`, `app_name`, `app_version`, `biz_type_id`\n" +
-                "\t, `business_category_key`, `category`, `city_id`, `client_id`, `client_ip`\n" +
+                "\t, `abtest`, `aor_type`, `app_name`, `app_version`, cast(`attribute` as string) as `attribute`, `biz_type_id`\n" +
+                "\t, `business_category_key`, `category`, `city_id`, `client_id`, `client_ip`, cast(`custom` as string) as `custom`\n" +
                 "\t, `device_model`, `device_type`, `download_channel`, `dpid`, `event_id`\n" +
-                "\t, `event_timestamp`, `event_type`, `geo_city_id`, `geo_city_name`, `geo_district_name`\n" +
+                "\t, `event_timestamp`, `event_type`, cast(`extension` as string) as `extension`, `geo_city_id`, `geo_city_name`, `geo_district_name`\n" +
                 "\t, `geohash`, `idfa`, `imei`, `is_auto`, `is_native`\n" +
                 "\t, `item_id`, `item_index`, `latitude`, `launch_channel`, `locate_city_id`\n" +
                 "\t, `log_channel`, `login_type`, `longitude`, `op_id`, `order_flow_bridge_id`\n" +
@@ -53,111 +39,18 @@ public class Main {
                 "\t, `utm_term`, `uuid`, `wifi_status`, `first_channel_id`, `second_channel_id`\n" +
                 "\t, `first_channel_name`, `second_channel_name`, `third_channel_id`, `third_channel_name`, `pinhf_user_type_id`\n" +
                 "\t, `pinhf_user_type_name`, `first_city_name`, `second_city_name`, `third_city_name`, `wechat_channel_id`\n" +
-                "\t, `open_gid`, `group_id` from mart_waimai.aggr_flow_pinhf_info WHERE dt >= '20230807' and dt < '20230808' and 1 = 1 and 1=1";
+                "\t, `open_gid`, `group_id` from mart_waimai.aggr_flow_pinhf_info WHERE dt >= '20230917' and dt < '20230918' and 1 = 1 and 1=1";
         return sql;
     }
 
-    private static void readProcessOutput(Process process) {
-        read(process.getInputStream(), System.out);
-        read(process.getErrorStream(), System.out);
-    }
-    private static void read(InputStream inputStream, PrintStream out) {
-        try {
-            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
 
-            String line;
-            while((line = reader.readLine()) != null) {
-                out.println(line);
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-        } finally {
-            try {
-                inputStream.close();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-
-        }
-
-    }
-
-    private void buildSegments(SparkSession sparkSession, String parquetBaseDstPath) throws IOException {
-        Path path = new Path(parquetBaseDstPath);
-        Configuration conf = sparkSession.sparkContext().hadoopConfiguration();
-        FileSystem fs = path.getFileSystem(conf);
-        FileStatus[] tabletFiles = fs.listStatus(path, new PathFilter() {
-            public boolean accept(Path path) {
-                return !path.getName().startsWith("_") && !path.getName().startsWith(".");
-            }
-        });
-
-
-        List<String> tabletPaths = (List) Arrays.stream(tabletFiles).filter((f) -> {
-            return f.getLen() != 0L;
-        }).map((f) -> {
-            return f.getPath().toString();
-        }).collect(Collectors.toList());
-        int parallel = tabletPaths.size();
-        JavaSparkContext jsc = new JavaSparkContext(sparkSession.sparkContext());
-        JavaRDD<String> rdd = jsc.parallelize(tabletPaths, parallel);
-        Configuration hadoopConfiguration = jsc.hadoopConfiguration();
-        Broadcast<SerializableWritable<Configuration>> broadcastedHadoopConfig = jsc.broadcast(new SerializableWritable(hadoopConfiguration));
-        rdd.foreachPartition((partition) -> {
-            List<String> fileList = new ArrayList();
-
-            while(partition.hasNext()) {
-                fileList.add(partition.next());
-            }
-
-            FileSystem hadoopFS = (new Path(parquetBaseDstPath)).getFileSystem((Configuration)((SerializableWritable)broadcastedHadoopConfig.value()).value());
-            int stageId = TaskContext.get().stageId();
-            long taskId = TaskContext.get().taskAttemptId();
-            int attemptId = TaskContext.get().attemptNumber();
-            int fileIdx = 0;
-            List<String> targetFilePaths = new ArrayList();
-
-            for (String outputFilePath : fileList) {
-                String localPath = String.format("qarquet_dir/%d/%d/%d/%d/test_parquet.parquet", stageId, taskId, attemptId, fileIdx);
-                File file = new File(localPath);
-                file.deleteOnExit();
-                hadoopFS.copyToLocalFile(new Path(outputFilePath), new Path(file.getAbsolutePath()));
-                String parentDir = file.getParentFile().getAbsolutePath();
-                LOG.info("hdfs file dir:{}, local file dir:{}, local parent dir:{}, local file size:{}", new Object[]{outputFilePath, file.getAbsolutePath(), parentDir, file.getTotalSpace()});
-                ++fileIdx;
-                List<String> cmds = Arrays.asList("./segment_builder", "--meta_file=./test_tablet_meta", String.format("--data_path=%s", parentDir));
-                ProcessBuilder cmdProcess = new ProcessBuilder(cmds);
-                Process process = cmdProcess.start();
-                readProcessOutput(process);
-                int exitCode = process.waitFor();
-                if (exitCode != 0) {
-                    throw new RuntimeException("error when exec cmd:" + cmds);
-                }
-
-                String outputTarFile = String.format("%s/segment_%d_%d_%d_%d.tar.gz", parentDir, stageId, taskId, attemptId, fileIdx);
-                String hdfsoutputTarFile = String.format("/ghnn01/kylin/sparkload/segment_test/segment_%d_%d_%d_%d.tar.gz", stageId, taskId, attemptId, fileIdx);
-                FileIOUtils.packFilesToTarGz(parentDir + "/segment/", outputTarFile);
-                hadoopFS.copyFromLocalFile(new Path(outputTarFile), new Path(hdfsoutputTarFile));
-                targetFilePaths.add(hdfsoutputTarFile);
-            }
-
-            for (String targetFilePath : targetFilePaths) {
-                System.out.println(targetFilePath);
-            }
-        });
-    }
-
-
-
-    public static void main(String[] args) throws InterruptedException, IOException {
+    public static void main(String[] args) throws IOException, SegmentLoadException {
         SparkSession sparkSession = SparkSession.builder().appName("nativeBulkLoad").enableHiveSupport().getOrCreate();
         SparkContext sparkContext = sparkSession.sparkContext();
         String parquetDstPath = "/ghnn01/kylin/sparkload/parquet_test/";
-        int TARGET_FILE_SIZE = 524288000;
-        Dataset<Row> dataset = sparkSession.sql(getHiveDataSQL());
-        dataset = dataset.cache();
-
-        Thread.sleep(1800000L);
-        sparkContext.stop();
+        Dataset<Row> data = sparkSession.sql(getHiveDataSQL());
+        String etlJobConfPath = "/ghnn01/kylin/segmentload/jobs/default_cluster_doris_vec/doris_vec__hmart_waimai_aggr_flow_pinhf_info__1695021629__cantor1365754592__0/453942011/config/jobconfig.json";
+        SegmentLoadETL etl = new SegmentLoadETL(sparkSession, etlJobConfPath, data);
+        etl.process();
     }
 }
