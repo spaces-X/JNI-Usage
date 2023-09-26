@@ -15,22 +15,20 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
-
 public class EtlJobConfig implements Serializable {
     // global dict
     public static final String GLOBAL_DICT_TABLE_NAME = "doris_gdt_%s__%s";
     public static final String DISTINCT_KEY_TABLE_NAME = "tmp_doris_dkt_%s__%s__%s";
     public static final String DORIS_INTERMEDIATE_HIVE_TABLE_NAME = "tmp_doris_iht_%s__%s__%s";
-
-    // hdfsEtlPath/jobs/dbname/loadLabel/PendingTaskSignature
-    private static final String ETL_OUTPUT_PATH_FORMAT = "%s/jobs/%s/%s/%d";
-    private static final String ETL_OUTPUT_FILE_NAME_DESC_V1 = "version.label.tableId.partitionId.indexId.bucket.schemaHash.parquet";
     // tableId.partitionId.indexId.bucket.schemaHash
     public static final String TABLET_META_FORMAT = "%d.%d.%d.%d.%d";
     public static final String ETL_OUTPUT_FILE_FORMAT = "parquet";
-
     // dpp result
     public static final String DPP_RESULT_NAME = "dpp_result.json";
+    // hdfsEtlPath/jobs/dbname/loadLabel/PendingTaskSignature
+    private static final String ETL_OUTPUT_PATH_FORMAT = "%s/jobs/%s/%s/%d";
+    private static final String ETL_OUTPUT_FILE_NAME_DESC_V1
+            = "version.label.tableId.partitionId.indexId.bucket.schemaHash.parquet";
     @SerializedName(value = "dorisTableName")
     public String dorisTableName;
     @SerializedName(value = "dorisDBName")
@@ -47,7 +45,7 @@ public class EtlJobConfig implements Serializable {
     public EtlJobProperty properties;
     @SerializedName(value = "configVersion")
     public ConfigVersion configVersion;
-    @SerializedName(value="customizedProperties")
+    @SerializedName(value = "customizedProperties")
     public Map<String, String> customizedProperties;
 
     public EtlJobConfig(Map<Long, EtlTable> tables, String outputFilePattern, String label, EtlJobProperty properties) {
@@ -61,28 +59,13 @@ public class EtlJobConfig implements Serializable {
         this.customizedProperties = Maps.newHashMap();
     }
 
-    @Override
-    public String toString() {
-        return "EtlJobConfig{" +
-                "tables=" + tables +
-                ", outputPath='" + outputPath + '\'' +
-                ", outputFilePattern='" + outputFilePattern + '\'' +
-                ", label='" + label + '\'' +
-                ", properties=" + properties +
-                ", version=" + configVersion +
-                '}';
-    }
-
-    public String getOutputPath() {
-        return outputPath;
-    }
-
     public static String getOutputPath(String hdfsEtlPath, String dbName, String loadLabel, long taskSignature) {
         return String.format(ETL_OUTPUT_PATH_FORMAT, hdfsEtlPath, dbName, loadLabel, taskSignature);
     }
 
     public static String getOutputFilePattern(String loadLabel, FilePatternVersion filePatternVersion) {
-        return String.format("%s.%s.%s.%s", filePatternVersion.name(), loadLabel, TABLET_META_FORMAT, ETL_OUTPUT_FILE_FORMAT);
+        return String.format("%s.%s.%s.%s", filePatternVersion.name(), loadLabel, TABLET_META_FORMAT,
+                ETL_OUTPUT_FILE_FORMAT);
     }
 
     public static String getDppResultFilePath(String outputPath) {
@@ -112,17 +95,33 @@ public class EtlJobConfig implements Serializable {
         }
     }
 
+    public static EtlJobConfig configFromJson(String jsonConfig) {
+        GsonBuilder gsonBuilder = new GsonBuilder();
+        Gson gson = gsonBuilder.create();
+        return gson.fromJson(jsonConfig, EtlJobConfig.class);
+    }
+
+    @Override
+    public String toString() {
+        return "EtlJobConfig{" +
+                "tables=" + tables +
+                ", outputPath='" + outputPath + '\'' +
+                ", outputFilePattern='" + outputFilePattern + '\'' +
+                ", label='" + label + '\'' +
+                ", properties=" + properties +
+                ", version=" + configVersion +
+                '}';
+    }
+
+    public String getOutputPath() {
+        return outputPath;
+    }
+
     public String configToJson() {
         GsonBuilder gsonBuilder = new GsonBuilder();
         gsonBuilder.addDeserializationExclusionStrategy(new HiddenAnnotationExclusionStrategy());
         Gson gson = gsonBuilder.create();
         return gson.toJson(this);
-    }
-
-    public static EtlJobConfig configFromJson(String jsonConfig) {
-        GsonBuilder gsonBuilder = new GsonBuilder();
-        Gson gson = gsonBuilder.create();
-        return gson.fromJson(jsonConfig, EtlJobConfig.class);
     }
 
     public static class EtlJobProperty implements Serializable {
@@ -133,10 +132,12 @@ public class EtlJobConfig implements Serializable {
 
         @Override
         public String toString() {
-            return "EtlJobProperty{" +
-                    "strictMode=" + strictMode +
-                    ", timezone='" + timezone + '\'' +
-                    '}';
+            return "EtlJobProperty{strictMode="
+                    + strictMode
+                    + ", timezone='"
+                    + timezone
+                    + '\''
+                    + '}';
         }
     }
 
@@ -204,10 +205,11 @@ public class EtlJobConfig implements Serializable {
         public String defineExpr;
 
         // for unit test
-        public EtlColumn() { }
+        public EtlColumn() {
+        }
 
         public EtlColumn(String columnName, String columnType, boolean isAllowNull, boolean isKey,
-                         String aggregationType, String defaultValue, int stringLength, int precision, int scale) {
+                String aggregationType, String defaultValue, int stringLength, int precision, int scale) {
             this.columnName = columnName;
             this.columnType = columnType;
             this.isAllowNull = isAllowNull;
@@ -262,13 +264,13 @@ public class EtlJobConfig implements Serializable {
         public String indexType;
         @SerializedName(value = "isBaseIndex")
         public boolean isBaseIndex;
-        @SerializedName(value="tabletMeta")
+        @SerializedName(value = "tabletMeta")
         public String tabletMetaJson;
 
         public EtlIndex(long indexId, List<EtlColumn> etlColumns, int schemaHash,
-                        String indexType, boolean isBaseIndex, String tabletMetaJson) {
+                String indexType, boolean isBaseIndex, String tabletMetaJson) {
             this.indexId = indexId;
-            this.columns =  etlColumns;
+            this.columns = etlColumns;
             this.schemaHash = schemaHash;
             this.indexType = indexType;
             this.isBaseIndex = isBaseIndex;
@@ -307,7 +309,7 @@ public class EtlJobConfig implements Serializable {
         public List<EtlPartition> partitions;
 
         public EtlPartitionInfo(String partitionType, List<String> partitionColumnRefs,
-                                List<String> distributionColumnRefs, List<EtlPartition> etlPartitions) {
+                List<String> distributionColumnRefs, List<EtlPartition> etlPartitions) {
             this.partitionType = partitionType;
             this.partitionColumnRefs = partitionColumnRefs;
             this.distributionColumnRefs = distributionColumnRefs;
@@ -338,9 +340,10 @@ public class EtlJobConfig implements Serializable {
         public int bucketNum;
         @SerializedName(value = "listKeys")
         public List<List<Object>> listKeys;
+
         // For RangePartition
         public EtlPartition(long partitionId, List<Object> startKeys, List<Object> endKeys,
-                            boolean isMaxPartition, int bucketNum) {
+                boolean isMaxPartition, int bucketNum) {
             this.partitionId = partitionId;
             this.startKeys = startKeys;
             this.endKeys = endKeys;
@@ -348,6 +351,7 @@ public class EtlJobConfig implements Serializable {
             this.bucketNum = bucketNum;
             this.listKeys = null;
         }
+
         // For ListPartition
         public EtlPartition(long partitionId, List<List<Object>> listKeys, int bucketNum) {
             this.partitionId = partitionId;
@@ -414,9 +418,9 @@ public class EtlJobConfig implements Serializable {
 
         // for data infile path
         public EtlFileGroup(SourceType sourceType, List<String> filePaths, List<String> fileFieldNames,
-                            List<String> columnsFromPath, String columnSeparator, String lineDelimiter,
-                            boolean isNegative, String fileFormat, Map<String, EtlColumnMapping> columnMappings,
-                            String where, List<Long> partitions) {
+                List<String> columnsFromPath, String columnSeparator, String lineDelimiter,
+                boolean isNegative, String fileFormat, Map<String, EtlColumnMapping> columnMappings,
+                String where, List<Long> partitions) {
             this.sourceType = sourceType;
             this.filePaths = filePaths;
             this.fileFieldNames = fileFieldNames;
@@ -432,8 +436,8 @@ public class EtlJobConfig implements Serializable {
 
         // for data from table
         public EtlFileGroup(SourceType sourceType, String hiveDbTableName, Map<String, String> hiveTableProperties,
-                            boolean isNegative, Map<String, EtlColumnMapping> columnMappings,
-                            String where, List<Long> partitions) {
+                boolean isNegative, Map<String, EtlColumnMapping> columnMappings,
+                String where, List<Long> partitions) {
             this.sourceType = sourceType;
             this.hiveDbTableName = hiveDbTableName;
             this.hiveTableProperties = hiveTableProperties;
@@ -466,19 +470,18 @@ public class EtlJobConfig implements Serializable {
     /**
      * FunctionCallExpr = functionName(args)
      * For compatibility with old designed functions used in Hadoop MapReduce etl
-     *
+     * <p>
      * expr is more general, like k1 + 1, not just FunctionCall
      */
     public static class EtlColumnMapping implements Serializable {
+        private static Map<String, String> functionMap = new ImmutableMap.Builder<String, String>()
+                .put("md5sum", "md5").build();
         @SerializedName(value = "functionName")
         public String functionName;
         @SerializedName(value = "args")
         public List<String> args;
         @SerializedName(value = "expr")
         public String expr;
-
-        private static Map<String, String> functionMap = new ImmutableMap.Builder<String, String>()
-                .put("md5sum", "md5").build();
 
         public EtlColumnMapping(String functionName, List<String> args) {
             this.functionName = functionName;

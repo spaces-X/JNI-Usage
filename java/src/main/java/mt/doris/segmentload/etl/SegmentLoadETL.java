@@ -1,13 +1,26 @@
 package mt.doris.segmentload.etl;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.PrintStream;
+import java.io.Serializable;
 import java.math.BigInteger;
 import java.net.URI;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import com.google.common.collect.Lists;
 import mt.doris.segmentload.common.*;
+import mt.doris.segmentload.etl.EtlJobConfig.EtlColumnMapping;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -43,7 +56,7 @@ public class SegmentLoadETL implements Serializable {
     private static final String DPP_RESULT_FILE = "dpp_result.json";
     private static final String PARTITION_ID = "__partitionIdx__";
     private static final String BUCKET_ID = "__bucketIdx__";
-    private static final String ETL_OUTPUT_FILE_NAME_DESC_V1 = "version.label.tableId.partitionId.bucket.schemaHash.parquet";
+    private static final String ETL_OUTPUT_PARQUET_FILE_NAME_DESC_V1 = "version.label.tableId.partitionId.bucket.schemaHash.parquet";
     // tableId.partitionId.indexId.bucket.schemaHash
     public static final String TABLET_META_FORMAT = "%d.%d.%d.%d";
 
@@ -73,8 +86,8 @@ public class SegmentLoadETL implements Serializable {
         switch (EtlJobConfig.FilePatternVersion.valueOf(fileNameArr[0])) {
             case V1:
                 // version.label.tableId.partitionId.indexId.bucket.schemaHash.parquet
-                if (fileNameArr.length != ETL_OUTPUT_FILE_NAME_DESC_V1.split("\\.").length) {
-                    throw new Exception("etl output file name error, format: " + ETL_OUTPUT_FILE_NAME_DESC_V1
+                if (fileNameArr.length != ETL_OUTPUT_PARQUET_FILE_NAME_DESC_V1.split("\\.").length) {
+                    throw new Exception("etl output file name error, format: " + ETL_OUTPUT_PARQUET_FILE_NAME_DESC_V1
                             + ", name: " + fileName);
                 }
                 long tableId = Long.parseLong(fileNameArr[2]);
@@ -212,7 +225,7 @@ public class SegmentLoadETL implements Serializable {
         for (StructField field : srcSchema.fields()) {
             srcColumnNames.add(field.name());
         }
-        Map<String, EtlJobConfig.EtlColumnMapping> columnMappings = fileGroup.columnMappings;
+        Map<String, EtlColumnMapping> columnMappings = fileGroup.columnMappings;
         // 1. process simple columns
         Set<String> mappingColumns = null;
         if (columnMappings != null) {
@@ -460,7 +473,7 @@ public class SegmentLoadETL implements Serializable {
                                     }
                                     dstPath = String.format(etlJobConfig.outputPath + "/parquet/" + etlJobConfig.outputFilePattern,
                                             tableId, partitionIdInRow, bucketIdInRow, baseIdx.schemaHash);
-                                    tmpPath = dstPath + "/tmp/" + String.format("%d.%d.tmp", taskPartitionId, attempNum);
+                                    tmpPath = dstPath + String.format(".%d.%d.tmp", taskPartitionId, attempNum);
                                     conf.setBoolean("spark.sql.parquet.writeLegacyFormat", false);
                                     conf.setBoolean("spark.sql.parquet.int64AsTimestampMillis", false);
                                     conf.setBoolean("spark.sql.parquet.int96AsTimestamp", true);
@@ -502,8 +515,8 @@ public class SegmentLoadETL implements Serializable {
 
 
     private void buildSegments() throws IOException {
-        String parquetBaseDstPath = etlJobConfig.outputPath + "/parquet/";
-        Path path = new Path(parquetBaseDstPath);
+        String parquetBaseDstPath = etlJobConfig.outputPath;
+        Path path = new Path(parquetBaseDstPath +  "/parquet/");
         Configuration conf = spark.sparkContext().hadoopConfiguration();
         FileSystem fs = path.getFileSystem(conf);
         FileStatus[] tabletFiles = fs.listStatus(path, new PathFilter() {
@@ -537,10 +550,14 @@ public class SegmentLoadETL implements Serializable {
             int attemptId = TaskContext.get().attemptNumber();
             int fileIdx = 0;
             List<String> targetFilePaths = new ArrayList();
+            String hdfsSegmentBaseDir = etlJobConfig.outputPath + "/segment/";
+            String hdfsSegTmpBaseDir = etlJobConfig.outputPath + "/segment_tmp/";
             for (EtlJobConfig.EtlIndex index : indexes) {
                 for (String parquetFilePath : fileList) {
-                    String metaFromFileName = getTabletMetaStr(parquetFilePath, index.indexId);
-                    String localPath = String.format("parquet_dir/%d/%d/%d/%d/%s/tablet.parquet", stageId, taskId, attemptId, fileIdx, metaFromFileName);
+                    String metaFromPath = getTabletMetaStr(parquetFilePath, index.indexId);
+                    String metaWithoutDot = metaFromPath.replaceAll("\\.", "_");
+                    System.out.println(metaWithoutDot);
+                    String localPath = String.format("parquet_dir/%d/%d/%d/%d/%s/tablet.parquet", stageId, taskId, attemptId, fileIdx, metaWithoutDot);
                     File file = new File(localPath);
                     file.deleteOnExit();
                     hadoopFS.copyToLocalFile(new Path(parquetFilePath), new Path(file.getAbsolutePath()));
@@ -556,23 +573,32 @@ public class SegmentLoadETL implements Serializable {
                         throw new RuntimeException("error when exec cmd:" + cmds);
                     }
 
-                    File segmentDir = new File(parentDir + "/segment/");
-                    File[] segmentFiles = segmentDir.listFiles();
-                    String hdfsoutputTmpDir = etlJobConfig.outputPath + "/segment_tmp/" + metaFromFileName + "/" + String.format("tmp_%s_%s/", taskId, attemptId);
+                    File segmentLocalDir = new File(parentDir + "/segment/");
+                    File[] segmentFiles = segmentLocalDir.listFiles();
+                    String hdfsSegTmpDir = hdfsSegTmpBaseDir + metaFromPath + "/" + String.format("tmp_%s_%s/", taskId, attemptId);
                     for (File segmentFile : segmentFiles) {
-                        hadoopFS.copyFromLocalFile(new Path(segmentFile.getPath()), new Path(hdfsoutputTmpDir));
+                        Path hdfsSegTmpFile = new Path(hdfsSegTmpDir, segmentFile.getName());
+                        hadoopFS.copyFromLocalFile(new Path(segmentFile.getPath()), hdfsSegTmpFile);
                     }
-                    String hdfsoutputDir = etlJobConfig.outputPath + "/segment/" + metaFromFileName + "/";
-                    hadoopFS.rename(new Path(hdfsoutputTmpDir), new Path(hdfsoutputDir));
+                    Path hdfsSegDir = new Path(hdfsSegmentBaseDir + metaFromPath);
+                    if (!hadoopFS.exists(hdfsSegDir.getParent())) {
+                        hadoopFS.mkdirs(hdfsSegDir);
+                    }
+                    if (!hadoopFS.rename(new Path(hdfsSegTmpDir), hdfsSegDir)) {
+                       LOG.error("rename failed, from {} to {}", hdfsSegTmpDir, hdfsSegDir);
+                       throw new SegmentLoadException("rename final segment dir failed");
+                    }
 
-                    targetFilePaths.add(hdfsoutputDir);
+                    targetFilePaths.add(hdfsSegDir.toUri().getPath());
                 }
             }
+
 
             for (String targetFilePath : targetFilePaths) {
                 System.out.println(targetFilePath);
             }
         });
+        fs.create(new Path(etlJobConfig.outputPath + "/_SUCCESS"));
     }
 
     public void process() throws SegmentLoadException, IOException {
