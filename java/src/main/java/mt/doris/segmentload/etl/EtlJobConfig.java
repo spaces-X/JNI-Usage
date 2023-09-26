@@ -264,17 +264,17 @@ public class EtlJobConfig implements Serializable {
         public String indexType;
         @SerializedName(value = "isBaseIndex")
         public boolean isBaseIndex;
-        @SerializedName(value = "tabletMeta")
-        public String tabletMetaJson;
+        @SerializedName(value = "tabletMetaUrl")
+        public String tabletMetaUrl;
 
         public EtlIndex(long indexId, List<EtlColumn> etlColumns, int schemaHash,
-                String indexType, boolean isBaseIndex, String tabletMetaJson) {
+                String indexType, boolean isBaseIndex, String tabletMetaUrl) {
             this.indexId = indexId;
             this.columns = etlColumns;
             this.schemaHash = schemaHash;
             this.indexType = indexType;
             this.isBaseIndex = isBaseIndex;
-            this.tabletMetaJson = tabletMetaJson;
+            this.tabletMetaUrl = tabletMetaUrl;
         }
 
         public EtlColumn getColumn(String name) {

@@ -2,6 +2,7 @@ package mt.doris.segmentload.etl;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -11,6 +12,7 @@ import java.math.BigInteger;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -20,12 +22,16 @@ import java.util.stream.Collectors;
 
 import com.google.common.collect.Lists;
 import mt.doris.segmentload.common.*;
+import mt.doris.segmentload.common.http.HttpUtils;
 import mt.doris.segmentload.etl.EtlJobConfig.EtlColumnMapping;
+import mt.doris.segmentload.etl.EtlJobConfig.EtlIndex;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.parquet.column.ParquetProperties;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
@@ -514,7 +520,7 @@ public class SegmentLoadETL implements Serializable {
     }
 
 
-    private void buildSegments() throws IOException {
+    private void buildSegments() throws IOException, SegmentLoadException {
         String parquetBaseDstPath = etlJobConfig.outputPath;
         Path path = new Path(parquetBaseDstPath +  "/parquet/");
         Configuration conf = spark.sparkContext().hadoopConfiguration();
@@ -536,7 +542,17 @@ public class SegmentLoadETL implements Serializable {
         JavaRDD<String> rdd = jsc.parallelize(tabletPaths, parallel);
         Configuration hadoopConfiguration = jsc.hadoopConfiguration();
         Broadcast<SerializableWritable<Configuration>> broadcastedHadoopConfig = jsc.broadcast(new SerializableWritable(hadoopConfiguration));
+
         List<EtlJobConfig.EtlIndex> indexes = etlJobConfig.tables.values().stream().findFirst().get().indexes;
+        Map<Long, String> index2TabletMeta = new HashMap<>();
+        for (EtlIndex idx : indexes) {
+            String tabletMetaJsonStr = HttpUtils.getTabletMeta(idx.tabletMetaUrl);
+            // for debug
+            LOG.info("index id:{}, tablet meta url:{} , tablet meta json str: \n"
+                    + "{}", idx.indexId, idx.tabletMetaUrl, tabletMetaJsonStr);
+            index2TabletMeta.put(idx.indexId, tabletMetaJsonStr);
+        }
+
         rdd.foreachPartition((partition) -> {
             List<String> fileList = new ArrayList();
 
@@ -553,6 +569,11 @@ public class SegmentLoadETL implements Serializable {
             String hdfsSegmentBaseDir = etlJobConfig.outputPath + "/segment/";
             String hdfsSegTmpBaseDir = etlJobConfig.outputPath + "/segment_tmp/";
             for (EtlJobConfig.EtlIndex index : indexes) {
+                File tabletMetaFile = new File(String.format("./tablet_meta/%d.json", index.indexId));
+                tabletMetaFile.deleteOnExit();
+                FileWriter fileWriter = new FileWriter(tabletMetaFile);
+                fileWriter.write(index2TabletMeta.get(index.indexId));
+                String tableMetaJsonStr = index2TabletMeta.get(index.indexId);
                 for (String parquetFilePath : fileList) {
                     String metaFromPath = getTabletMetaStr(parquetFilePath, index.indexId);
                     String metaWithoutDot = metaFromPath.replaceAll("\\.", "_");
@@ -564,7 +585,7 @@ public class SegmentLoadETL implements Serializable {
                     String parentDir = file.getParentFile().getAbsolutePath();
                     LOG.info("hdfs file dir:{}, local file dir:{}, local parent dir:{}, local file size:{}", parquetFilePath, file.getAbsolutePath(), parentDir, file.getTotalSpace());
                     ++fileIdx;
-                    List<String> cmds = Arrays.asList("./segment_builder", "--meta_file=./test_tablet_meta", String.format("--data_path=%s", parentDir));
+                    List<String> cmds = Arrays.asList("./segment_builder", String.format("--meta_file=%s", tabletMetaFile.getAbsolutePath()), String.format("--data_path=%s", parentDir));
                     ProcessBuilder cmdProcess = new ProcessBuilder(cmds);
                     Process process = cmdProcess.start();
                     readProcessOutput(process);
