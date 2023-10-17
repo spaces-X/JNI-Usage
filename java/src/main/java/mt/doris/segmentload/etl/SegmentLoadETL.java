@@ -2,6 +2,7 @@ package mt.doris.segmentload.etl;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,10 +39,12 @@ import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.spark.Partitioner;
 import org.apache.spark.SerializableWritable;
 import org.apache.spark.TaskContext;
+import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.ForeachPartitionFunction;
 import org.apache.spark.api.java.function.MapFunction;
+import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.sql.*;
 import org.apache.spark.sql.catalyst.InternalRow;
@@ -55,6 +58,8 @@ import org.apache.spark.sql.types.StructType;
 import org.apache.spark.util.SerializableConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import scala.Tuple2;
+
 public class SegmentLoadETL implements Serializable {
     private static final Logger LOG = LoggerFactory.getLogger(SegmentLoadETL.class);
     private static final String NULL_FLAG = "\\N";
@@ -64,7 +69,7 @@ public class SegmentLoadETL implements Serializable {
     private static final String BUCKET_ID = "__bucketIdx__";
     private static final String ETL_OUTPUT_PARQUET_FILE_NAME_DESC_V1 = "version.label.tableId.partitionId.bucket.schemaHash.parquet";
     // tableId.partitionId.indexId.bucket.schemaHash
-    public static final String TABLET_META_FORMAT = "%d.%d.%d.%d";
+    public static final String TABLET_META_FORMAT = "%d.%d.%d.%d.%d";
 
 
     private SparkSession spark;
@@ -422,8 +427,16 @@ public class SegmentLoadETL implements Serializable {
             return toReturn;
         }, rowEncoder);
 
-        Dataset<Row> repartitioned = dataframe.repartition(2000, dataframe.col(PARTITION_ID), dataframe.col(BUCKET_ID));
-        repartitioned = repartitioned.sortWithinPartitions(dataframe.col(PARTITION_ID), dataframe.col(BUCKET_ID));
+        JavaRDD<Row> rowRdd = dataframe.toJavaRDD();
+        // pid and bucket id is on the end of the row
+        JavaPairRDD<Tuple2<Long,Integer>, Row> pairRDD = rowRdd.mapToPair(
+                (PairFunction<Row, Tuple2<Long, Integer>, Row>) row ->
+                        new Tuple2<>(new Tuple2<>(row.getLong(row.size() - 2), row.getInt(row.size() - 1)), row)
+        );
+        JavaPairRDD<Tuple2<Long, Integer>, Row> partitionedPairRDD = pairRDD.partitionBy(new TabletPartitioner(partitionInfo));
+        Dataset<Row> repartitioned = spark.createDataFrame(partitionedPairRDD.values() ,dataframe.schema());
+        // Dataset<Row> repartitioned = dataframe.repartition(2000, dataframe.col(PARTITION_ID), dataframe.col(BUCKET_ID));
+        // repartitioned = repartitioned.sortWithinPartitions(dataframe.col(PARTITION_ID), dataframe.col(BUCKET_ID));
         return repartitioned;
     }
 
@@ -570,9 +583,15 @@ public class SegmentLoadETL implements Serializable {
             String hdfsSegTmpBaseDir = etlJobConfig.outputPath + "/segment_tmp/";
             for (EtlJobConfig.EtlIndex index : indexes) {
                 File tabletMetaFile = new File(String.format("./tablet_meta/%d.json", index.indexId));
-                tabletMetaFile.deleteOnExit();
+                if (!tabletMetaFile.getParentFile().exists()) {
+                    tabletMetaFile.getParentFile().mkdirs();
+                }
+                tabletMetaFile.createNewFile();
                 FileWriter fileWriter = new FileWriter(tabletMetaFile);
+                System.out.println("idx tablet meta jsonstr:" + index2TabletMeta.get(index.indexId));
                 fileWriter.write(index2TabletMeta.get(index.indexId));
+                fileWriter.flush();
+                fileWriter.close();
                 String tableMetaJsonStr = index2TabletMeta.get(index.indexId);
                 for (String parquetFilePath : fileList) {
                     String metaFromPath = getTabletMetaStr(parquetFilePath, index.indexId);
@@ -586,6 +605,7 @@ public class SegmentLoadETL implements Serializable {
                     LOG.info("hdfs file dir:{}, local file dir:{}, local parent dir:{}, local file size:{}", parquetFilePath, file.getAbsolutePath(), parentDir, file.getTotalSpace());
                     ++fileIdx;
                     List<String> cmds = Arrays.asList("./segment_builder", String.format("--meta_file=%s", tabletMetaFile.getAbsolutePath()), String.format("--data_path=%s", parentDir));
+                    System.out.println(String.join("  ", cmds));
                     ProcessBuilder cmdProcess = new ProcessBuilder(cmds);
                     Process process = cmdProcess.start();
                     readProcessOutput(process);
